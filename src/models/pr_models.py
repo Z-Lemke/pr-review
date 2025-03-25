@@ -17,8 +17,6 @@ class PRComment(BaseModel):
     path: str = Field(description="File path where the comment should be added")
     line: int = Field(description="Line number where the comment should be added")
     body: str = Field(description="Content of the comment")
-    commit_id: Optional[str] = None
-    comment_id: Optional[int] = None  # Used when retrieving existing comments
 
 
 class PullRequest(BaseModel):
@@ -34,6 +32,13 @@ class PullRequest(BaseModel):
     repository: str
     changes: List[FileChange] = Field(default_factory=list)
     comments: List[PRComment] = Field(default_factory=list)
+
+
+class PRIssue(BaseModel):
+    """Represents an issue found in a PR."""
+    line_number: int = Field(description="Line number where the issue was found")
+    file_path: str = Field(description="File path where the issue was found")
+    suggestion: str = Field(description="Suggestion to fix the issue")
 
 
 class PRReviewState(BaseModel):

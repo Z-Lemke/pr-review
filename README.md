@@ -55,10 +55,6 @@ An LLM-powered agent that automatically reviews Pull Requests.
 
 ## Usage
 
-```bash
-python -m src.main review --pr <PR_NUMBER> --repo <REPOSITORY_NAME>
-```
-
 Example:
 ```bash
 python -m src.main review 1 --repo username/repository

@@ -154,10 +154,9 @@ class TestLLMService:
             
             # Verify that we get a fallback response for invalid JSON
             assert len(result) == 1
-            assert "Failed to parse response" in result[0]["description"]
-            assert result[0]["line_number"] == 0
-            assert result[0]["severity"] == "low"
-            assert "manually" in result[0]["suggestion"]
+            assert "Failed to parse response" in result[0]["suggestion"]
+            assert result[0]["file_path"] == "test_file.py"
+            assert result[0]["line_number"] == 1
             
             mock_chain.invoke.assert_called_once()
 
@@ -169,7 +168,7 @@ class TestLLMService:
             
             # Setup the chain pipeline to raise an exception
             mock_chain = MagicMock()
-            mock_chain.invoke.side_effect = Exception("Test error")
+            mock_chain.invoke.side_effect = Exception("Test exception")
             
             mock_model = MagicMock()
             mock_create_model.return_value = mock_model
@@ -190,109 +189,8 @@ class TestLLMService:
             
             # Verify that we get a fallback response for exceptions
             assert len(result) == 1
-            assert "Error analyzing diff" in result[0]["description"]
-            assert "Test error" in result[0]["description"]
-            assert result[0]["line_number"] == 0
-            assert result[0]["severity"] == "low"
-            assert "review" in result[0]["suggestion"].lower()
+            assert "Error analyzing diff" in result[0]["suggestion"]
+            assert result[0]["file_path"] == "test_file.py"
+            assert result[0]["line_number"] == 1
             
-            mock_chain.invoke.assert_called_once()
-
-    def test_generate_pr_comments_empty_issues(self):
-        """Test generate_pr_comments method with empty issues list."""
-        service = LLMService()
-        result = service.generate_pr_comments([], "test_file.py")
-        
-        assert result == []
-
-    def test_generate_pr_comments_success(self):
-        """Test generate_pr_comments method with successful response."""
-        issues = [
-            {
-                "line_number": 10,
-                "description": "Test issue",
-                "severity": "medium",
-                "suggestion": "Fix it"
-            }
-        ]
-        
-        with patch.object(LLMService, '_create_chat_model') as mock_create_model, \
-             patch('src.services.llm_service.ChatPromptTemplate') as mock_prompt, \
-             patch('src.services.llm_service.StrOutputParser') as mock_parser:
-            
-            # Setup the chain pipeline
-            mock_chain = MagicMock()
-            mock_chain.invoke.return_value = "Generated comment"
-            
-            mock_model = MagicMock()
-            mock_create_model.return_value = mock_model
-            
-            mock_prompt_instance = MagicMock()
-            mock_prompt.from_messages.return_value = mock_prompt_instance
-            
-            mock_parser_instance = MagicMock()
-            mock_parser.return_value = mock_parser_instance
-            
-            # Set up the pipeline
-            mock_prompt_instance.__or__.return_value = MagicMock()
-            mock_prompt_instance.__or__.return_value.__or__.return_value = mock_chain
-            
-            # Create a service with our mocks
-            service = LLMService()
-            result = service.generate_pr_comments(issues, "test_file.py")
-            
-            # Verify the result
-            assert len(result) == 1
-            assert result[0]["path"] == "test_file.py"
-            assert result[0]["line"] == 10
-            assert result[0]["body"] == "Generated comment"
-            
-            # Verify that the chain was invoked
-            mock_chain.invoke.assert_called_once()
-
-    def test_generate_pr_comments_exception(self):
-        """Test generate_pr_comments method when an exception occurs."""
-        issues = [
-            {
-                "line_number": 10,
-                "description": "Test issue",
-                "severity": "medium",
-                "suggestion": "Fix it"
-            }
-        ]
-        
-        with patch.object(LLMService, '_create_chat_model') as mock_create_model, \
-             patch('src.services.llm_service.ChatPromptTemplate') as mock_prompt, \
-             patch('src.services.llm_service.StrOutputParser') as mock_parser:
-            
-            # Setup the chain pipeline to raise an exception
-            mock_chain = MagicMock()
-            mock_chain.invoke.side_effect = Exception("Test error")
-            
-            mock_model = MagicMock()
-            mock_create_model.return_value = mock_model
-            
-            mock_prompt_instance = MagicMock()
-            mock_prompt.from_messages.return_value = mock_prompt_instance
-            
-            mock_parser_instance = MagicMock()
-            mock_parser.return_value = mock_parser_instance
-            
-            # Set up the pipeline
-            mock_prompt_instance.__or__.return_value = MagicMock()
-            mock_prompt_instance.__or__.return_value.__or__.return_value = mock_chain
-            
-            # Create a service with our mocks
-            service = LLMService()
-            result = service.generate_pr_comments(issues, "test_file.py")
-            
-            # Verify the fallback comment format
-            assert len(result) == 1
-            assert result[0]["path"] == "test_file.py"
-            assert result[0]["line"] == 10
-            assert "MEDIUM Issue" in result[0]["body"]
-            assert "Test issue" in result[0]["body"]
-            assert "Fix it" in result[0]["body"]
-            
-            # Verify that the chain was invoked
             mock_chain.invoke.assert_called_once()

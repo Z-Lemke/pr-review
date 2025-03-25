@@ -36,34 +36,28 @@ class TestFileChange:
 
 class TestPRComment:
     def test_pr_comment_creation(self):
-        """Test creating a PRComment object."""
+        """Test PRComment creation with all fields."""
         comment = PRComment(
-            path="test.py",
+            path="test_file.py",
             line=10,
-            body="This is a comment",
-            commit_id="abc123",
-            comment_id=456
+            body="Test comment"
         )
         
-        assert comment.path == "test.py"
+        assert comment.path == "test_file.py"
         assert comment.line == 10
-        assert comment.body == "This is a comment"
-        assert comment.commit_id == "abc123"
-        assert comment.comment_id == 456
+        assert comment.body == "Test comment"
     
     def test_pr_comment_required_fields(self):
-        """Test PRComment with only required fields."""
+        """Test PRComment creation with only required fields."""
         comment = PRComment(
-            path="test.py",
+            path="test_file.py",
             line=10,
-            body="This is a comment"
+            body="Test comment"
         )
         
-        assert comment.path == "test.py"
+        assert comment.body == "Test comment"
+        assert comment.path == "test_file.py"
         assert comment.line == 10
-        assert comment.body == "This is a comment"
-        assert comment.commit_id is None
-        assert comment.comment_id is None
 
 
 class TestPullRequest:

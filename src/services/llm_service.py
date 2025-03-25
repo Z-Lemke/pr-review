@@ -49,27 +49,50 @@ Focus on:
 5. Missing tests or documentation
 6. Requirements implementation issues
 
+IMPORTANT: For each issue you find, you MUST identify the EXACT line number in the new code.
+Look for lines starting with '+' in the diff and count them correctly.
+The line number should correspond to the actual line in the file AFTER the changes are applied.
+
 For each issue you find, provide:
-1. The line number in the new code
-2. A description of the issue
-3. The severity (high, medium, low)
-4. A suggestion for how to fix it
+1. The line_number in the new code (this is critical for in-line comments)
+2. A suggestion for how to fix it
 
 Respond in JSON format with a list of issues:
 [
   {
     "line_number": 123,
-    "description": "Description of the issue",
-    "severity": "high|medium|low",
-    "suggestion": "How to fix the issue"
+    "suggestion": "Detailed explanation of the issue and how to fix it"
   }
 ]
 
 If no issues are found, return an empty list: []
 """
+        # Extract line numbers from the diff to help the LLM
+        diff_lines = diff_content.split('\n')
+        line_mapping = {}
+        current_line = 0
+        
+        for line in diff_lines:
+            if line.startswith('@@'):
+                # Parse the @@ -a,b +c,d @@ line to get the starting line number
+                try:
+                    # Extract the +c,d part and then get c (starting line number)
+                    plus_part = line.split('+')[1].split(' ')[0]
+                    current_line = int(plus_part.split(',')[0])
+                except (IndexError, ValueError):
+                    current_line = 0
+            elif line.startswith('+') and not line.startswith('+++'):
+                # Map this line in the diff to the actual file line number
+                line_mapping[len(line_mapping) + 1] = current_line
+                current_line += 1
+            elif line.startswith(' '):
+                # Unchanged line
+                current_line += 1
+            # We don't increment for removed lines (starting with '-')
+        
         prompt = ChatPromptTemplate.from_messages([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"File: {file_path}\n\nDiff:\n{diff_content}")
+            HumanMessage(content=f"File: {file_path}\n\nDiff:\n{diff_content}\n\nLine mapping (diff line -> file line): {json.dumps(line_mapping)}")
         ])
         
         chat_model = self._create_chat_model()
@@ -86,61 +109,19 @@ If no issues are found, return an empty list: []
             else:
                 json_str = response.strip()
                 
-            return json.loads(json_str)
+            issues = json.loads(json_str)
+            
+            # Ensure all issues have valid line numbers and add file_path
+            for issue in issues:
+                if issue.get("line_number", 0) <= 0:
+                    # If the LLM didn't provide a valid line number, set it to 1
+                    issue["line_number"] = 1
+                # Add the file path to each issue
+                issue["file_path"] = file_path
+            
+            return issues
         except json.JSONDecodeError:
             # Fallback in case the LLM doesn't return valid JSON
-            return [{"line_number": 0, "description": f"Failed to parse response: {response[:100]}...", "severity": "low", "suggestion": "Please fix the issue manually"}]
+            return [{"line_number": 1, "file_path": file_path, "suggestion": f"Failed to parse response: {response[:100]}..."}]
         except Exception as e:
-            return [{"line_number": 0, "description": f"Error analyzing diff: {str(e)}", "severity": "low", "suggestion": "Please review the diff manually"}]
-
-    def generate_pr_comments(self, issues: List[Dict[str, Any]], file_path: str) -> List[Dict[str, Any]]:
-        """
-        Generate PR comments from issues.
-        
-        Args:
-            issues: List of issues found in the diff
-            file_path: The path of the file with issues
-            
-        Returns:
-            List of PR comments to add
-        """
-        if not issues:
-            return []
-            
-        system_prompt = """You are a helpful and constructive PR reviewer. 
-Your task is to convert analysis issues into constructive PR comments.
-Make sure your comments are:
-1. Specific and actionable
-2. Polite and constructive 
-3. Clear about the impact of the issue
-4. Helpful with a suggested solution
-
-Format the comment in Markdown.
-"""
-        comments = []
-        
-        for issue in issues:
-            prompt = ChatPromptTemplate.from_messages([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=f"Issue:\n{json.dumps(issue, indent=2)}\n\nCreate a PR comment for this issue.")
-            ])
-            
-            chat_model = self._create_chat_model(temperature=0.2)
-            chain = prompt | chat_model | StrOutputParser()
-            
-            try:
-                comment_text = chain.invoke({})
-                comments.append({
-                    "path": file_path,
-                    "line": issue.get("line_number", 1),
-                    "body": comment_text.strip()
-                })
-            except Exception as e:
-                # Fallback to simpler comment if generation fails
-                comments.append({
-                    "path": file_path,
-                    "line": issue.get("line_number", 1),
-                    "body": f"**{issue.get('severity', 'medium').upper()} Issue**: {issue.get('description')}\n\n**Suggestion**: {issue.get('suggestion')}"
-                })
-                
-        return comments
+            return [{"line_number": 1, "file_path": file_path, "suggestion": f"Error analyzing diff: {str(e)}"}]

@@ -119,10 +119,8 @@ class PRReviewAgent:
             # Analyze the diff
             issues = self.llm_service.analyze_diff(file_change.filename, file_change.patch)
             
-            # Add file-specific issues to the total list
-            for issue in issues:
-                issue["file"] = file_change.filename
-                all_issues.append(issue)
+            # Add issues to the total list
+            all_issues.extend(issues)
             
             # Mark the file as analyzed
             analyzed_files.append(file_change.filename)
@@ -144,19 +142,23 @@ class PRReviewAgent:
         # Group issues by file
         issues_by_file = {}
         for issue in state.detected_issues:
-            file_path = issue.get("file", "")
+            file_path = issue.get("file_path", "")
             if file_path not in issues_by_file:
                 issues_by_file[file_path] = []
             issues_by_file[file_path].append(issue)
         
-        # Generate comments for each file
+        # Generate comments directly from issues
         all_comments = state.comments_to_add.copy()
         
         for file_path, issues in issues_by_file.items():
-            comments = self.llm_service.generate_pr_comments(issues, file_path)
-            
-            for comment_data in comments:
-                all_comments.append(PRComment(**comment_data))
+            for issue in issues:
+                all_comments.append(
+                    PRComment(
+                        path=issue.get("file_path", ""),
+                        line=issue.get("line_number", 1),
+                        body=f"**Suggestion**: {issue.get('suggestion', '')}"
+                    )
+                )
         
         return PRReviewState(
             pull_request=state.pull_request,
@@ -180,16 +182,21 @@ class PRReviewAgent:
                 continue
                 
             try:
-                # Add the comment to GitHub
+                # Ensure we have a valid line number (never use line 0)
+                line_number = comment.line
+                
+                # Add the comment to GitHub with explicit path and line parameters
                 added_comment = self.github_service.add_pr_comment(
                     state.pull_request.pr_number, 
-                    comment
+                    comment,
+                    path=comment.path,
+                    line=line_number
                 )
                 
                 # Add to the list of added comments
                 added_comments.append(added_comment)
                 
-                logger.info(f"Added comment to {comment.path} at line {comment.line}")
+                logger.info(f"Added comment to {comment.path} at line {line_number}")
             except Exception as e:
                 logger.error(f"Error adding comment: {str(e)}")
         

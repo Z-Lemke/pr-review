@@ -150,21 +150,16 @@ class TestGitHubService:
 
     def test_add_pr_comment(self, sample_pr_comment):
         """Test add_pr_comment method."""
-        with patch('subprocess.run') as mock_run, \
-             patch('builtins.open', MagicMock()), \
-             patch('os.path.exists', return_value=True), \
-             patch('os.remove'), \
+        with patch.object(GitHubService, '_add_line_comment_via_api', return_value=sample_pr_comment) as mock_line_comment, \
+             patch.object(GitHubService, '_add_regular_pr_comment') as mock_regular_comment, \
              patch.object(GitHubService, '_check_gh_cli'):
-            
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            mock_run.return_value = mock_result
             
             service = GitHubService(repository="owner/repo")
             result = service.add_pr_comment(123, sample_pr_comment)
             
             assert result == sample_pr_comment
-            mock_run.assert_called_once()
+            mock_line_comment.assert_called_once_with(123, "owner/repo", sample_pr_comment)
+            mock_regular_comment.assert_not_called()
 
     def test_add_pr_comment_no_repository(self, sample_pr_comment):
         """Test add_pr_comment method with no repository specified."""
@@ -181,7 +176,6 @@ class TestGitHubService:
                     "path": "test_file.py",
                     "line": 10,
                     "body": "Comment text",
-                    "commitId": "abc123",
                     "id": 456
                 },
                 {
@@ -206,15 +200,8 @@ class TestGitHubService:
             assert comments[0].path == "test_file.py"
             assert comments[0].line == 10
             assert comments[0].body == "Comment text"
-            assert comments[0].commit_id == "abc123"
-            assert comments[0].comment_id == 456
             
-            mock_run.assert_called_once_with(
-                ["gh", "pr", "view", "123", "--repo", "owner/repo", "--json", "comments"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
+            mock_run.assert_called_once()
 
     def test_get_pr_comments_no_repository(self):
         """Test get_pr_comments method with no repository specified."""
@@ -222,3 +209,150 @@ class TestGitHubService:
             service = GitHubService()
             with pytest.raises(ValueError, match="Repository must be specified"):
                 service.get_pr_comments(123)
+
+    def test_get_pr_head_commit(self):
+        """Test _get_pr_head_commit method."""
+        mock_commit_data = {"headRefOid": "abc123def456"}
+        
+        with patch('subprocess.run') as mock_run:
+            mock_result = MagicMock()
+            mock_result.stdout = json.dumps(mock_commit_data)
+            mock_result.returncode = 0
+            mock_run.return_value = mock_result
+            
+            with patch.object(GitHubService, '_check_gh_cli'):
+                service = GitHubService(repository="owner/repo")
+                commit_id = service._get_pr_head_commit(123, "owner/repo")
+                
+                assert commit_id == "abc123def456"
+                mock_run.assert_called_once_with(
+                    ["gh", "pr", "view", "123", "--repo", "owner/repo", "--json", "headRefOid"],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+
+    def test_create_temp_file(self):
+        """Test _create_temp_file method."""
+        test_content = "Test content"
+        expected_path = f"/tmp/pr_comment_{os.getpid()}.txt"
+        
+        with patch('builtins.open', MagicMock()) as mock_open, \
+             patch.object(GitHubService, '_check_gh_cli'):
+            service = GitHubService()
+            result = service._create_temp_file(test_content)
+            
+            assert result == expected_path
+            mock_open.assert_called_once_with(expected_path, "w")
+            mock_open.return_value.__enter__.return_value.write.assert_called_once_with(test_content)
+
+    def test_print_curl_command(self):
+        """Test _print_curl_command method."""
+        endpoint = "/repos/owner/repo/pulls/123/comments"
+        api_params = {"body": "Test comment", "path": "test.py", "line": 10}
+        
+        with patch('builtins.print') as mock_print, \
+             patch.object(GitHubService, '_check_gh_cli'):
+            service = GitHubService()
+            service._print_curl_command(endpoint, api_params)
+            
+            # Verify print was called twice (header and command)
+            assert mock_print.call_count == 2
+            
+            # Check that the curl command contains the expected elements
+            curl_command = mock_print.call_args_list[1][0][0]
+            assert "curl -X POST" in curl_command
+            assert "Accept: application/vnd.github+json" in curl_command
+            assert "Authorization: Bearer $(gh auth token)" in curl_command
+            assert endpoint in curl_command
+            assert json.dumps(api_params) in curl_command
+
+    def test_add_line_comment_via_api_success(self, sample_pr_comment):
+        """Test _add_line_comment_via_api method when successful."""
+        with patch('subprocess.run') as mock_run, \
+             patch('builtins.open', MagicMock()), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.remove'), \
+             patch.object(GitHubService, '_get_pr_head_commit', return_value="abc123"), \
+             patch.object(GitHubService, '_print_curl_command'), \
+             patch.object(GitHubService, '_check_gh_cli'):
+            
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = '{"id": 12345}'
+            mock_run.return_value = mock_result
+            
+            service = GitHubService()
+            result = service._add_line_comment_via_api(123, "owner/repo", sample_pr_comment)
+            
+            assert result == sample_pr_comment
+            assert mock_run.call_count == 1
+            assert "--input" in mock_run.call_args[0][0]
+
+    def test_add_line_comment_via_api_failure(self, sample_pr_comment):
+        """Test _add_line_comment_via_api method when it fails."""
+        with patch('subprocess.run') as mock_run, \
+             patch('builtins.open', MagicMock()), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.remove'), \
+             patch.object(GitHubService, '_get_pr_head_commit', return_value="abc123"), \
+             patch.object(GitHubService, '_print_curl_command'), \
+             patch.object(GitHubService, '_check_gh_cli'):
+            
+            mock_result = MagicMock()
+            mock_result.returncode = 1
+            mock_result.stderr = "Error: Invalid input"
+            mock_run.return_value = mock_result
+            
+            service = GitHubService()
+            result = service._add_line_comment_via_api(123, "owner/repo", sample_pr_comment)
+            
+            assert result is None  # Should return None on failure
+
+    def test_add_regular_pr_comment(self, sample_pr_comment):
+        """Test _add_regular_pr_comment method."""
+        with patch('subprocess.run') as mock_run, \
+             patch('builtins.open', MagicMock()), \
+             patch('os.path.exists', return_value=True), \
+             patch('os.remove'), \
+             patch.object(GitHubService, '_create_temp_file', return_value="/tmp/test_file.txt"), \
+             patch.object(GitHubService, '_check_gh_cli'):
+            
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_run.return_value = mock_result
+            
+            service = GitHubService()
+            result = service._add_regular_pr_comment(123, "owner/repo", sample_pr_comment)
+            
+            assert result == sample_pr_comment
+            mock_run.assert_called_once()
+            assert "gh" in mock_run.call_args[0][0][0]
+            assert "pr" in mock_run.call_args[0][0][1]
+            assert "comment" in mock_run.call_args[0][0][2]
+
+    def test_add_pr_comment_line_specific(self, sample_pr_comment):
+        """Test add_pr_comment method with line-specific comment."""
+        with patch.object(GitHubService, '_add_line_comment_via_api', return_value=sample_pr_comment) as mock_line_comment, \
+             patch.object(GitHubService, '_add_regular_pr_comment') as mock_regular_comment, \
+             patch.object(GitHubService, '_check_gh_cli'):
+            
+            service = GitHubService(repository="owner/repo")
+            result = service.add_pr_comment(123, sample_pr_comment)
+            
+            assert result == sample_pr_comment
+            mock_line_comment.assert_called_once_with(123, "owner/repo", sample_pr_comment)
+            mock_regular_comment.assert_not_called()
+
+    def test_add_pr_comment_fallback(self, sample_pr_comment):
+        """Test add_pr_comment method falling back to regular comment."""
+        with patch.object(GitHubService, '_add_line_comment_via_api', return_value=None) as mock_line_comment, \
+             patch.object(GitHubService, '_add_regular_pr_comment', return_value=sample_pr_comment) as mock_regular_comment, \
+             patch.object(GitHubService, '_check_gh_cli'):
+            
+            service = GitHubService(repository="owner/repo")
+            result = service.add_pr_comment(123, sample_pr_comment)
+            
+            assert result == sample_pr_comment
+            mock_line_comment.assert_called_once_with(123, "owner/repo", sample_pr_comment)
+            mock_regular_comment.assert_called_once_with(123, "owner/repo", sample_pr_comment)

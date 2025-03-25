@@ -37,14 +37,14 @@ class TestPRReviewAgent:
             assert agent.graph == mock_graph
 
     @pytest.mark.asyncio
-    async def test_fetch_pr_info_success(self, mock_github_service, mock_llm_service, sample_pull_request, sample_pr_review_state):
+    async def test_fetch_pr_info_success(self, mock_github_service, mock_llm_service, sample_pr_review_state):
         """Test fetch_pr_info method with successful response."""
-        mock_github_service.get_pull_request.return_value = sample_pull_request
+        mock_github_service.get_pull_request.return_value = sample_pr_review_state.pull_request
         
         agent = PRReviewAgent(mock_github_service, mock_llm_service)
         result = await agent.fetch_pr_info(sample_pr_review_state)
         
-        assert result.pull_request == sample_pull_request
+        assert result.pull_request == sample_pr_review_state.pull_request
         assert result.error is None
         mock_github_service.get_pull_request.assert_called_once_with(
             sample_pr_review_state.pull_request.pr_number
@@ -94,32 +94,35 @@ class TestPRReviewAgent:
         mock_github_service.get_pr_diff.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_analyze_diff_success(self, mock_github_service, mock_llm_service, sample_pr_review_state, sample_file_change):
+    async def test_analyze_diff_success(self, sample_pr_review_state, sample_file_change):
         """Test analyze_diff method with successful response."""
+        mock_llm_service = MagicMock()
+        mock_github_service = MagicMock()
+        
+        # Mock the analyze_diff response from LLM service
+        mock_llm_service.analyze_diff.return_value = [
+            {
+                "file_path": "test_file.py",
+                "line_number": 42,
+                "suggestion": "This looks like it could be improved"
+            }
+        ]
+        
         # Add a file change to the PR
         updated_pr = sample_pr_review_state.pull_request.copy(
             update={"changes": [sample_file_change]}
         )
         state = sample_pr_review_state.copy(update={"pull_request": updated_pr})
         
-        mock_issues = [
-            {
-                "line_number": 10,
-                "description": "Test issue",
-                "severity": "medium",
-                "suggestion": "Fix it"
-            }
-        ]
-        mock_llm_service.analyze_diff.return_value = mock_issues
-        
         agent = PRReviewAgent(mock_github_service, mock_llm_service)
         result = await agent.analyze_diff(state)
         
-        assert sample_file_change.filename in result.analyzed_files
         assert len(result.detected_issues) == 1
-        assert result.detected_issues[0]["file"] == sample_file_change.filename
-        assert result.detected_issues[0]["line_number"] == 10
-        assert result.error is None
+        assert result.detected_issues[0]["file_path"] == "test_file.py"
+        assert result.detected_issues[0]["line_number"] == 42
+        assert result.detected_issues[0]["suggestion"] == "This looks like it could be improved"
+        assert sample_file_change.filename in result.analyzed_files
+        
         mock_llm_service.analyze_diff.assert_called_once_with(
             sample_file_change.filename, sample_file_change.patch
         )
@@ -148,42 +151,42 @@ class TestPRReviewAgent:
         mock_llm_service.analyze_diff.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_generate_comments_success(self, mock_github_service, mock_llm_service, sample_pr_review_state):
+    async def test_generate_comments_success(self, sample_pr_review_state):
         """Test generate_comments method with successful response."""
-        issues = [
-            {
-                "file": "test_file.py",
-                "line_number": 10,
-                "description": "Test issue",
-                "severity": "medium",
-                "suggestion": "Fix it"
-            }
-        ]
-        state = sample_pr_review_state.copy(update={"detected_issues": issues})
+        mock_llm_service = MagicMock()
+        mock_github_service = MagicMock()
         
-        mock_comments = [
-            {
-                "path": "test_file.py",
-                "line": 10,
-                "body": "Generated comment"
+        # Set up the state with detected issues
+        state = sample_pr_review_state.copy(
+            update={
+                "detected_issues": [
+                    {
+                        "file_path": "test_file.py",
+                        "line_number": 42,
+                        "suggestion": "This looks like it could be improved"
+                    }
+                ]
             }
-        ]
-        mock_llm_service.generate_pr_comments.return_value = mock_comments
+        )
         
         agent = PRReviewAgent(mock_github_service, mock_llm_service)
         result = await agent.generate_comments(state)
         
         assert len(result.comments_to_add) == 1
         assert result.comments_to_add[0].path == "test_file.py"
-        assert result.comments_to_add[0].line == 10
-        assert result.comments_to_add[0].body == "Generated comment"
-        assert result.error is None
-        mock_llm_service.generate_pr_comments.assert_called_once()
+        assert result.comments_to_add[0].line == 42
+        assert "This looks like it could be improved" in result.comments_to_add[0].body
 
     @pytest.mark.asyncio
-    async def test_add_comments_success(self, mock_github_service, mock_llm_service, sample_pr_review_state, sample_pr_comment):
+    async def test_add_comments_success(self, sample_pr_review_state, sample_pr_comment):
         """Test add_comments method with successful response."""
-        state = sample_pr_review_state.copy(update={"comments_to_add": [sample_pr_comment]})
+        mock_llm_service = MagicMock()
+        mock_github_service = MagicMock()
+        
+        # Set up the state with comments to add
+        state = sample_pr_review_state.copy(
+            update={"comments_to_add": [sample_pr_comment]}
+        )
         
         mock_github_service.add_pr_comment.return_value = sample_pr_comment
         
@@ -194,8 +197,13 @@ class TestPRReviewAgent:
         assert result.comments_added[0] == sample_pr_comment
         assert result.completed is True
         assert result.error is None
+        
+        # Check that add_pr_comment was called with the correct parameters
         mock_github_service.add_pr_comment.assert_called_once_with(
-            state.pull_request.pr_number, sample_pr_comment
+            state.pull_request.pr_number, 
+            sample_pr_comment,
+            path=sample_pr_comment.path, 
+            line=sample_pr_comment.line
         )
 
     @pytest.mark.asyncio

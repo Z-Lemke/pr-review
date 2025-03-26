@@ -25,12 +25,20 @@ def review(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose logging")
 ):
     """Review a GitHub pull request using LLM analysis."""
-    # Set up logging
-    logger = setup_logging(level="DEBUG" if verbose else "INFO")
+    # Set up logging with more detailed output for verbose mode
+    logger = setup_logging(level="DEBUG" if verbose else "INFO", include_module=verbose)
     
     # Initialize services
     github_service = GitHubService(repository=repo)
-    llm_service = LLMService(model_name=model, base_url=ollama_url)
+    
+    # Ensure the Ollama URL is properly formatted for the API
+    if not ollama_url.endswith("/api/generate"):
+        if ollama_url.endswith("/"):
+            ollama_url = f"{ollama_url}api/generate"
+        else:
+            ollama_url = f"{ollama_url}/api/generate"
+    
+    llm_service = LLMService(api_url=ollama_url, model=model)
     
     # Initialize agent
     agent = PRReviewAgent(github_service, llm_service)
@@ -59,14 +67,48 @@ def review(
             console.print(f"[bold red]Error:[/bold red] {result['error']}")
         else:
             console.print(f"\n[bold green]PR Review completed successfully![/bold green]")
-            console.print(f"Analyzed {len(result.get('analyzed_files', []))} files")
-            console.print(f"Found {len(result.get('detected_issues', []))} potential issues")
-            console.print(f"Added {len(result.get('comments_added', []))} comments to the PR")
             
-            if result.get('comments_added'):
+            # Extract data from the result dictionary
+            file_changes = result.get('file_changes', [])
+            complete_files = result.get('complete_files', {})
+            detected_issues = result.get('detected_issues', [])
+            added_comments = result.get('added_comments', [])
+            
+            # Calculate analyzed files
+            analyzed_file_paths = set()
+            for change in file_changes:
+                if hasattr(change, 'filename'):
+                    analyzed_file_paths.add(change.filename)
+                elif isinstance(change, dict) and 'filename' in change:
+                    analyzed_file_paths.add(change['filename'])
+            
+            # Add complete files to analyzed files
+            if isinstance(complete_files, dict):
+                analyzed_file_paths.update(complete_files.keys())
+            
+            # Print summary information
+            console.print(f"Analyzed {len(analyzed_file_paths)} files")
+            
+            # Print the list of analyzed files
+            if analyzed_file_paths:
+                console.print("\n[bold]Files analyzed:[/bold]")
+                for file_path in sorted(analyzed_file_paths):
+                    console.print(f"- {file_path}")
+            
+            console.print(f"\nFound {len(detected_issues)} potential issues")
+            console.print(f"Added {len(added_comments)} comments to the PR")
+            
+            if added_comments:
                 console.print("\n[bold]Comments added:[/bold]")
-                for i, comment in enumerate(result.get('comments_added', []), 1):
-                    console.print(f"{i}. {comment.path}:{comment.line}")
+                for i, comment in enumerate(added_comments, 1):
+                    if hasattr(comment, 'file_path') and hasattr(comment, 'line_number'):
+                        console.print(f"{i}. {comment.file_path}:{comment.line_number}")
+                    elif isinstance(comment, dict):
+                        file_path = comment.get('file_path', comment.get('path', 'Unknown file'))
+                        line_number = comment.get('line_number', comment.get('line', 'Unknown line'))
+                        console.print(f"{i}. {file_path}:{line_number}")
+                    else:
+                        console.print(f"{i}. Unknown location")
     
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {str(e)}")
